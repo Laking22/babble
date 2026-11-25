@@ -20,6 +20,7 @@ CHECKS = [
     "immersion_dsp_check.py", "immersion_qa_check.py", "mastering_polish_check.py", "pack_catalog_check.py",
     "pack_signing_check.py", "rushed_line_check.py", "silent_line_check.py", "top5_fixes_check.py",
     "home_move_check.py", "pc_voices_check.py", "double_start_check.py", "dialogue_voice_check.py", "updater_check.py", "untitled_book_check.py", "windows_port_check.py",
+    "pack_admin_check.py",
 ]
 KNOWN_FAILING = ["interactive_script_check.py", "music_check.py"]  # (failing before the cross-platform work)
 
