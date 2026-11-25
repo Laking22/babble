@@ -154,3 +154,11 @@ pip packages), `install()` turns results into an installed model. Back end: `che
 ## Voices and rights
 
 Built-in voice packs are free-to-use voices only. Users train voices at their own responsibility.
+
+## License
+
+Babble is free software under the [GNU General Public License v3.0 or later](LICENSE): you can use, change and
+share it, and anything you share that's built on it must be open source under the same license.
+
+The Stable Audio 3 code in `narrator/vendor/stable_audio_3` is MIT (see its LICENSE). The models, voices and sounds
+Babble downloads have their own licenses, which Babble shows where they're used.
