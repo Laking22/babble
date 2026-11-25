@@ -1,0 +1,6 @@
+{
+  "bundle": {
+    "resources": ["engine/"],
+    "macOS": { "minimumSystemVersion": "14.0", "signingIdentity": "-" }
+  }
+}

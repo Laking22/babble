@@ -1,0 +1,18 @@
+.venv/
+__pycache__/
+*.pyc
+tests/out/
+.DS_Store
+.ruff_cache/
+nsis/
+desktop/src-tauri/engine/
+
+# internal notes
+COWORK.md
+GEMINI.md
+HANDOFF.md
+PLAN.md
+swarm-audit-log.md
+
+# test recordings and mixes (kept on this Mac)
+samples/

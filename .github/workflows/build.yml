@@ -1,0 +1,299 @@
+# Babble on Windows, Linux and macOS: builds the desktop app and runs the checks that need no speech models.
+#
+# - Every push and pull request: Windows and Linux (the app's installer + the checks). Their results show on each
+#   commit; while the Windows and Linux versions are being made they're allowed to fail without failing the run.
+# - macOS only when asked (Actions → Build → Run workflow → "Also build for macOS"), or for a version tag (v1.0.0):
+#   GitHub counts macOS minutes ten times on private repos, and the Mac version is built on the Mac anyway.
+# - Each run keeps its installers for 14 days (the run's page → Artifacts).
+# - A version tag (git tag -a v0.2.0 -m "Babble Beta 2" -m "what's new…") also puts the installers that built on a
+#   GitHub release with the tag's title and text. Babble's updater (narrator/updater.py) offers it to everyone.
+name: Build
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+    paths-ignore: ["**.md", "samples/**", "LICENSE"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      mac:
+        description: Also build for macOS (uses about 10× the minutes)
+        type: boolean
+        default: false
+      voices:
+        description: On Linux, also set up voices and speak a line with each engine (downloads ~12 GB, about 40 min)
+        type: boolean
+        default: false
+
+concurrency:  # a newer push to the same branch replaces a run still going
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  plan:  # which systems this run builds for (macOS only for a version tag or when asked)
+    runs-on: ubuntu-latest
+    outputs:
+      targets: ${{ steps.pick.outputs.targets }}
+    steps:
+      - id: pick
+        env:
+          REF: ${{ github.ref }}
+          MAC: ${{ inputs.mac }}
+        run: |
+          t='{"name":"Windows","os":"windows-latest","bundles":"nsis","porting":true},{"name":"Linux","os":"ubuntu-22.04","bundles":"deb,appimage","porting":true}'
+          if [[ "$REF" == refs/tags/v* || "$MAC" == "true" ]]; then
+            t="$t"',{"name":"macOS","os":"macos-15","bundles":"app","porting":false}'
+          fi
+          echo "targets=[$t]" >> "$GITHUB_OUTPUT"
+
+  app:
+    name: App · ${{ matrix.name }}
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.targets) }}
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.porting }}
+    timeout-minutes: ${{ inputs.voices && 150 || 60 }}
+    defaults:
+      run:
+        working-directory: desktop
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux packages the app needs
+        if: runner.os == 'Linux'
+        working-directory: .
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev \
+            libssl-dev patchelf build-essential file
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+
+      - run: npm ci
+
+      - name: Stage Python engine resources
+        working-directory: .
+        run: |
+          rm -rf desktop/src-tauri/engine
+          mkdir -p desktop/src-tauri/engine
+          cp run.py babble_mcp.py requirements.txt requirements-pc.txt desktop/src-tauri/engine/
+          cp -r narrator desktop/src-tauri/engine/narrator
+          find desktop/src-tauri/engine -type d -name "__pycache__" -exec rm -rf {} +
+          find desktop/src-tauri/engine -type f -name "*.pyc" -delete
+
+      - name: Build the app
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            npx tauri build --bundles ${{ matrix.bundles }} --config src-tauri/tauri.windows.release.conf.json
+          elif [ "$RUNNER_OS" = "Linux" ]; then
+            npx tauri build --bundles ${{ matrix.bundles }} --config src-tauri/tauri.linux.release.conf.json
+          else
+            npx tauri build --bundles ${{ matrix.bundles }} --config src-tauri/tauri.macos.release.conf.json
+          fi
+
+      # the Mac app as one file (ditto keeps what a .app needs; the artifact upload alone would lose the program's
+      # permission to run)
+      - name: Zip the Mac app
+        if: runner.os == 'macOS'
+        run: |
+          v=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          cd src-tauri/target/release/bundle/macos
+          ditto -c -k --keepParent Babble.app "Babble_${v}_mac_$(uname -m | sed 's/arm64/aarch64/').zip"
+          ls -la
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Babble-${{ matrix.name }}
+          path: |
+            desktop/src-tauri/target/release/bundle/nsis/*.exe
+            desktop/src-tauri/target/release/bundle/deb/*.deb
+            desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+            desktop/src-tauri/target/release/bundle/macos/*.zip
+          if-no-files-found: warn
+          retention-days: 14
+
+      # What someone does on a Windows PC: install it, open it, and wait for Babble's engine to answer. The first
+      # start downloads Python and Babble's packages, so this takes several minutes.
+      - name: Install and open it (Windows)
+        if: runner.os == 'Windows'
+        working-directory: .
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem desktop/src-tauri/target/release/bundle/nsis/*-setup.exe | Select-Object -First 1
+          Start-Process $setup.FullName -ArgumentList '/S' -Wait
+          $dir = Join-Path $env:LOCALAPPDATA 'Babble'
+          Write-Host "Installed in ${dir}:"
+          Get-ChildItem $dir | ForEach-Object { Write-Host "  $($_.Name)" }
+          if (-not (Test-Path (Join-Path $dir 'engine\run.py'))) {
+            Write-Error "The installed app has no engine\run.py: Babble would say its engine files weren't found."
+            exit 1
+          }
+          $exe = Join-Path $dir 'Babble.exe'
+          if (-not (Test-Path $exe)) { Write-Error "The installed app isn't called Babble.exe."; exit 1 }
+          $exe = Get-Item $exe
+          Write-Host "Opening $($exe.Name)…"
+          Start-Process $exe.FullName
+          $health = $null
+          for ($i = 0; $i -lt 120 -and -not $health; $i++) {
+            Start-Sleep -Seconds 10
+            try { $health = Invoke-RestMethod http://127.0.0.1:7895/api/health -TimeoutSec 5 } catch { }
+          }
+          $log = Join-Path $env:APPDATA 'Babble\logs\Babble.log'
+          if (Test-Path $log) { Write-Host '--- Babble.log (end) ---'; Get-Content $log -Tail 60 }
+          if (-not $health) { Write-Error "Babble's engine didn't answer within 20 minutes of opening the app."; exit 1 }
+          Write-Host "Babble's engine answered: $($health | ConvertTo-Json -Compress)"
+
+      # The same on Linux: install the .deb, open it (on a virtual screen), wait for the engine. Its first start downloads
+      # Python and Babble's packages.
+      - name: Install and open it (Linux)
+        if: runner.os == 'Linux'
+        working-directory: .
+        run: |
+          deb=$(ls desktop/src-tauri/target/release/bundle/deb/*.deb | head -1)
+          pkg=$(dpkg-deb -f "$deb" Package)
+          sudo apt-get install -y "./$deb" xvfb ffmpeg
+          exe=$(dpkg -L "$pkg" | grep -E '/bin/[Bb]abble$' | head -1)
+          res=$(dpkg -L "$pkg" | grep -E '/engine/run\.py$' | head -1)
+          echo "Installed: $exe, engine: $res"
+          [ -n "$exe" ] || { echo "::error::The package has no Babble program in bin/"; exit 1; }
+          [ -n "$res" ] || { echo "::error::The package has no engine/run.py: Babble would say its engine files weren't found."; exit 1; }
+          xvfb-run -a "$exe" > /tmp/babble-app.log 2>&1 &
+          health=""
+          for i in $(seq 1 120); do
+            sleep 10
+            health=$(curl -s -m 5 http://127.0.0.1:7895/api/health || true)
+            [ -n "$health" ] && break
+          done
+          echo "--- Babble.log (end) ---"; tail -n 60 ~/.local/share/babble/logs/Babble.log 2>/dev/null || cat /tmp/babble-app.log
+          [ -n "$health" ] || { echo "::error::Babble's engine didn't answer within 20 minutes of opening the app."; exit 1; }
+          echo "Babble's engine answered: $health"
+          token=$(cat ~/.local/share/babble/engine-token)
+          echo "Set up voices: $(curl -s -H "X-Babble-Token: $token" http://127.0.0.1:7895/api/voices-setup)"
+
+      # The same on a Mac that has never had Babble: unzip it, open it, wait for the engine. Its first start downloads
+      # Python, Babble's packages and FFmpeg into the data folder.
+      - name: Unzip and open it (macOS)
+        if: runner.os == 'macOS'
+        working-directory: .
+        run: |
+          zip=$(ls desktop/src-tauri/target/release/bundle/macos/*.zip | head -1)
+          mkdir -p ~/BabbleTest && ditto -x -k "$zip" ~/BabbleTest
+          [ -f ~/BabbleTest/Babble.app/Contents/Resources/engine/run.py ] || { echo "::error::The app has no engine inside it"; exit 1; }
+          codesign --verify --deep ~/BabbleTest/Babble.app && echo "signature ok"
+          ~/BabbleTest/Babble.app/Contents/MacOS/Babble > /tmp/babble-app.log 2>&1 &
+          health=""
+          for i in $(seq 1 120); do
+            sleep 10
+            health=$(curl -s -m 5 http://127.0.0.1:7895/api/health || true)
+            [ -n "$health" ] && break
+          done
+          echo "--- Babble.log (end) ---"; tail -n 80 ~/Library/Logs/Babble.log 2>/dev/null || cat /tmp/babble-app.log
+          [ -n "$health" ] || { echo "::error::Babble's engine didn't answer within 20 minutes of opening the app."; exit 1; }
+          echo "Babble's engine answered: $health"
+          token=$(cat ~/Library/Application\ Support/Babble/engine-token)
+          echo "Update check: $(curl -s -H "X-Babble-Token: $token" http://127.0.0.1:7895/api/update)"
+
+      - name: Set up voices and speak with each engine (Linux, on request)
+        if: runner.os == 'Linux' && inputs.voices
+        working-directory: .
+        timeout-minutes: 90
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL  # (room for the models)
+          df -h ~ | tail -1
+          ~/.local/share/babble/.venv/bin/python tests/pc_voices_live.py
+
+  engine:
+    name: Engine checks · ${{ matrix.name }}
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.targets) }}
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.porting }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: ffmpeg
+        run: |
+          case "$RUNNER_OS" in
+            Linux) sudo apt-get update && sudo apt-get install -y ffmpeg ;;
+            Windows) choco install ffmpeg -y --no-progress ;;
+            macOS) brew install ffmpeg ;;
+          esac
+
+      - name: Python packages
+        run: |
+          python -m pip install --upgrade pip
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            pip install -r requirements.txt
+          else
+            # MLX (Apple's machine-learning library) only runs on Apple Silicon: the other systems go without it
+            grep -v -i -E '^mlx' requirements.txt > requirements-ci.txt
+            pip install -r requirements-ci.txt
+          fi
+
+      - name: Checks
+        env:
+          PYTHONUTF8: "1"
+        run: python tests/run_all.py
+
+  release:  # a version tag: the installers that built go on a GitHub release
+    name: Release
+    needs: app
+    if: always() && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Put the installers on the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
+          title=$(git for-each-ref "refs/tags/$TAG" --format='%(contents:subject)')
+          git for-each-ref "refs/tags/$TAG" --format='%(contents:body)' > notes.md
+          mkdir out
+          find dist -type f \( -name '*-setup.exe' -o -name '*.deb' -o -name '*.AppImage' -o -name '*_mac_*.zip' \) -exec cp {} out/ \;
+          ls -la out
+          [ -n "$(ls out)" ] || { echo "::error::No installer built"; exit 1; }
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" out/* --clobber
+          else
+            gh release create "$TAG" out/* --verify-tag --title "${title:-$TAG}" --notes-file notes.md
+          fi

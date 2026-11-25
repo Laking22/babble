@@ -1,0 +1,17 @@
+# Windows and Linux: what the voice engines need there, installed with requirements.txt minus its mlx and
+# transformers lines (narrator/pc_setup.py). PyTorch itself isn't here: it's set up from the Models page, built for
+# the computer's graphics card (narrator/pc_setup.py torch).
+transformers==4.57.3  # what qwen-tts 0.1.1 is made for
+librosa==0.11.0
+einops==0.8.1
+sox==1.5.0
+loguru==0.7.3
+psutil==7.2.2
+# Kokoro's English text step (misaki) needs spaCy's small English model. Without it misaki tries to install it with
+# pip, which this Python doesn't have (it's set up with uv).
+en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
+# installed without their own lists: each names torch, which comes from PyTorch's own index instead
+accelerate==1.12.0  # no-deps
+snac==1.2.1  # no-deps
+qwen-tts==0.1.1  # no-deps (its list also pulls in gradio, for a demo Babble doesn't use)
+kokoro==0.9.4  # no-deps (misaki and the rest are in requirements.txt)

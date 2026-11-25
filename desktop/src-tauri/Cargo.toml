@@ -1,0 +1,32 @@
+[package]
+name = "narrator-studio"
+version = "0.1.0"
+description = "Babble: text to speech and audiobooks on your Mac"
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "narrator_studio_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# the API keys, in the macOS Keychain (narrator/vault.py)
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "=3.6.0"
+libc = "0.2"
+
+# Unix process group & pipe helpers on Linux
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
+# the API keys (Windows Credential Manager) and ShellExecuteW browser launch
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Security_Credentials", "Win32_Foundation", "Win32_UI_Shell"] }
+getrandom = "0.3"
