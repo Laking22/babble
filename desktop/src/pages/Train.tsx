@@ -429,7 +429,7 @@ function Choose({ back, next }: { back: () => void; next: (recipe: string) => vo
   return (
     <div className="page narrow">
       <Back onClick={back} label="All models" />
-      <div className="page-head"><div><h1>Which model should it train?</h1><p>A new model starts with one voice; you can train up to 8 into it.</p></div></div>
+      <div className="page-head"><div><h1>Which model should it train?</h1><p>A model holds up to 8 voices, trained together. You can add more later.</p></div></div>
       <div className="stack">
         {(options.data?.recipes || []).filter((r) => r.ready).sort((a, b) => Number(b.id === "qwen") - Number(a.id === "qwen")).map((r) => (
           <label key={r.id} className={`choice ${pick === r.id ? "sel" : ""}`}>
@@ -697,11 +697,19 @@ function TrainStep({ view, back, home, goConnections }: {
   const toast = useToast();
   const options = useLoad(trainApi.options);
   // each prepared voice: how it's shown and its gender (a model can hold several)
-  const [rows, setRows] = useState(() => view.voices.map((dataset) => {
+  const newRow = (dataset: string) => {
     const guess = dataset.split("-")[0];
     return { dataset, shown: guess.charAt(0).toUpperCase() + guess.slice(1), gender: "unspecified" };
-  }));
+  };
+  const [rows, setRows] = useState(() => view.voices.map(newRow));
   const setRow = (i: number, change: Partial<(typeof rows)[number]>) => setRows(rows.map((r, k) => (k === i ? { ...r, ...change } : r)));
+  // more prepared voices can join (or leave) before training: they're all trained into this one model
+  const prepared = useLoad(trainApi.voices);
+  const ready = (prepared.data || []).filter((v) => v.ready && !v.running);
+  const pickVoices = (names: string[]) => {
+    if (!names.length) return toast("A model needs at least one voice.", true);
+    setRows(names.map((d) => rows.find((r) => r.dataset === d) || newRow(d)));
+  };
   const [model, setModel] = useState("");
   const [backend, setBackend] = useState("kaggle");
   const confirmCost = useCostConfirm();
@@ -747,6 +755,11 @@ function TrainStep({ view, back, home, goConnections }: {
       <div className="card card-pad stack">
         <div className="summary-row"><Orb value={rows[0]?.dataset || ""} size={30} /><b>{rows.map((r) => r.shown || r.dataset).join(", ")}</b>
           <span className="muted small">· {view.addTo ? `goes into ${view.addTo.title}, with ${view.addTo.voices.map((v) => v.name).join(", ")}` : `a new ${RECIPE_NAME[view.recipe] || view.recipe} model`}</span></div>
+        {ready.length > 1 && (
+          <Field label="Voices in this model">
+            <PreparedPicker voices={ready} value={rows.map((r) => r.dataset)} onChange={pickVoices} max={MAX_VOICES - (view.addTo?.voices.length || 0)} />
+          </Field>
+        )}
         {rows.map((r, i) => (
           <div className="row" key={r.dataset}>
             <Field label={rows.length > 1 ? `Shown as · ${r.dataset}` : "Shown as"}><input className="input" value={r.shown} onChange={(e) => setRow(i, { shown: e.target.value })} /></Field>

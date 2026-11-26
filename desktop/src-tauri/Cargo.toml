@@ -1,6 +1,6 @@
 [package]
 name = "narrator-studio"
-version = "0.1.0"
+version = "0.2.0"
 description = "Babble: text to speech and audiobooks on your Mac"
 license = "GPL-3.0-or-later"
 edition = "2021"

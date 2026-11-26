@@ -332,6 +332,7 @@ export function ScriptView({
   const lines = useRef<Map<number, HTMLDivElement>>(new Map());
   const focusReq = useRef<{ start: number; caret: number; t: number } | null>(null);
   const focusAt = (start: number, caret: number) => { focusReq.current = { start, caret, t: Date.now() }; };
+  const [emptyDrop, setEmptyDrop] = useState(false);  // a sound held over the empty story
   useEffect(() => {
     const req = focusReq.current;
     if (!req) return;
@@ -361,8 +362,30 @@ export function ScriptView({
   if (!blocks.length) {
     return (
       <textarea
-        className="editor"
+        className={`editor${emptyDrop ? " editor-drop" : ""}`}
         value={story}
+        // a sound dragged in before there's any text: it starts the story, and typing goes on after it
+        onDragOver={(e) => {
+          if (!e.dataTransfer.types.includes(DRAG_TYPE)) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "copy";
+          setEmptyDrop(true);
+        }}
+        onDragLeave={() => setEmptyDrop(false)}
+        onDrop={(e) => {
+          setEmptyDrop(false);
+          const raw = e.dataTransfer.getData(DRAG_TYPE);
+          if (!raw) return;
+          e.preventDefault();
+          let tag = raw, name = raw;
+          if (raw.startsWith("{") && raw.includes('"tag"')) {
+            try { const parsed = JSON.parse(raw); tag = parsed.tag || raw; name = parsed.name || tag; } catch { /* plain tag */ }
+          }
+          const next = `${tag} ${story.trimStart()}`;
+          onChangeStory(next);
+          focusAt(0, tag.length + 1);
+          onTagDropped?.(tag, name);
+        }}
         onChange={(e) => {
           const v = e.target.value;
           // the first letters typed turn this box into the paragraph editor: keep typing there
