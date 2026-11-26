@@ -151,9 +151,6 @@ Recipe (`training/base.py`): `prepare()` turns Train-tab datasets into a `Packag
 pip packages), `install()` turns results into an installed model. Back end: `check`, `estimate`, `submit`,
 `status`, `fetch`. Command line: `python -m narrator.training --help`.
 
-## Voices and rights
-
-Built-in voice packs are free-to-use voices only. Users train voices at their own responsibility.
 
 ## License
 
